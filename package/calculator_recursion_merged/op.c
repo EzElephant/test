@@ -75,13 +75,13 @@ typedef struct
 typedef struct _Node
 {
     TokenSet data;
-    int val;
+    int val, flag, reg;
     char lexeme[MAXLEN];
     struct _Node *left;
     struct _Node *right;
 } BTNode;
 
-int sbcount = 0;
+int sbcount = 0, used[8];
 Symbol table[TBLSIZE];
 
 // Initialize the symbol table with builtin variables
@@ -117,6 +117,12 @@ void err(ErrorType errorNum);
 // for codeGen
 // Print the syntax tree in prefix
 void printPrefix(BTNode *root);
+// dfs variables
+int dfs(BTNode *root);
+// init all register
+void init_reg();
+// search for free register
+int search_reg();
 // code gendration
 int codegen(BTNode *root);
 
@@ -282,7 +288,7 @@ int getval(char *str)
     strcpy(table[sbcount].name, str);
     table[sbcount].val = 0;
     sbcount++;
-    return (-1e9+87);
+    return (-1e9 + 87);
 }
 
 int setval(char *str, int val)
@@ -325,6 +331,7 @@ BTNode *makeNode(TokenSet tok, const char *lexe)
     strcpy(node->lexeme, lexe);
     node->data = tok;
     node->val = 0;
+    node->flag = 0;
     node->left = NULL;
     node->right = NULL;
     return node;
@@ -363,6 +370,8 @@ void statement(void)
             fprintf(stderr, "Prefix traversal: ");
             printPrefix(retp);
             fprintf(stderr, "\n");
+            dfs(retp);
+            init_reg();
             codegen(retp);
             freeTree(retp);
             fprintf(stderr, ">> ");
@@ -379,7 +388,16 @@ void statement(void)
 // assign_expr := ID ASSIGN assign_expr | or_expr
 BTNode *assign_expr(void)
 {
-    return or_expr();
+    BTNode *retp = or_expr(), *left = NULL, *node;
+    if (retp->data == ID && match(ASSIGN))
+    {
+        node = makeNode(ASSIGN, getLexeme());
+        advance();
+        node->left = retp;
+        node->right = assign_expr();
+        return node;
+    }
+    return retp;
 }
 
 // or_expr := xor_expr or_expr_tail
@@ -525,23 +543,8 @@ BTNode *factor(void)
     }
     else if (match(ID))
     {
-        left = makeNode(ID, getLexeme());
+        retp = makeNode(ID, getLexeme());
         advance();
-        if (match(ASSIGN))
-        {
-            retp = makeNode(ASSIGN, getLexeme());
-            advance();
-            retp->left = left;
-            retp->right = assign_expr();
-        }
-        else if (match(INCDEC))
-        {
-            retp = left;
-            retp->right = makeNode(INCDEC, getLexeme());
-            advance();
-        }
-        else
-            retp = left;
     }
     else if (match(INCDEC))
     {
@@ -634,6 +637,37 @@ void printPrefix(BTNode *root)
     }
 }
 
+int dfs(BTNode *root)
+{
+    if (root != NULL)
+        return root->flag = dfs(root->left) | dfs(root->right) | (root->data == ID);
+    return 0;
+}
+
+void init_reg()
+{
+    for (int i = 0; i < 8; i++)
+        used[i] = 0;
+}
+
+int search_reg()
+{
+    for (int i = 7; i >= 0; i--)
+    {
+        if (used[i] == 0)
+        {
+            if (i == 3)
+            {
+                int x = 1;
+                x++;
+            }
+            used[i] = 87;
+            return i;
+        }
+    }
+    error(RUNOUT);
+}
+
 int codegen(BTNode *root)
 {
     int retval = 0, lv = 0, rv = 0;
@@ -641,79 +675,8 @@ int codegen(BTNode *root)
     {
         switch (root->data)
         {
-        case ID:
-            lv = codegen(root->left);
-            rv = codegen(root->right);
-            retval = getval(root->lexeme);
-            if (retval == (-1e9+87))
-            {
-                printf("EXIT 1\n");
-                error(NOTFOUND);
-            }
-            if (lv != 0)
-            {
-                retval = setval(root->lexeme, retval + lv);
-                printf("MOV r3 %d\n", retval);
-                printf("MOV [%d] r3\n", getmem(root->lexeme));
-            }
-            else if (rv != 0)
-            {
-                setval(root->lexeme, getval(root->lexeme) + rv);
-                printf("MOV r3 %d\n", retval + rv);
-                printf("MOV [%d] r3\n", getmem(root->lexeme));
-            }
-            break;
-        case INT:
-            retval = atoi(root->lexeme);
-            break;
-        case ASSIGN:
-            rv = codegen(root->right);
-            retval = setval(root->left->lexeme, rv);
-            printf("MOV r3 %d\n", rv);
-            printf("MOV [%d] r3\n", getmem(root->left->lexeme));
-            break;
-        case OR:
-        case XOR:
-        case AND:
-        case ADDSUB:
-        case MULDIV:
-            lv = codegen(root->left);
-            rv = codegen(root->right);
-            if (strcmp(root->lexeme, "+") == 0)
-            {
-                retval = lv + rv;
-            }
-            else if (strcmp(root->lexeme, "-") == 0)
-            {
-                retval = lv - rv;
-            }
-            else if (strcmp(root->lexeme, "*") == 0)
-            {
-                retval = lv * rv;
-            }
-            else if (strcmp(root->lexeme, "/") == 0)
-            {
-                if (rv == 0)
-                {
-                    printf("EXIT 1\n");
-                    error(DIVZERO);
-                }
-                retval = lv / rv;
-            }
-            else if (strcmp(root->lexeme, "|") == 0)
-            {
-                retval = lv | rv;
-            }
-            else if (strcmp(root->lexeme, "^") == 0)
-            {
-                retval = lv ^ rv;
-            }
-            else if (strcmp(root->lexeme, "&") == 0)
-            {
-                retval = lv & rv;
-            }
-            break;
         case INCDEC:
+            root->reg = search_reg();
             if (strcmp(root->lexeme, "++") == 0)
             {
                 retval = 1;
@@ -722,6 +685,106 @@ int codegen(BTNode *root)
             {
                 retval = -1;
             }
+            printf("MOV r%d 1\n", root->reg);
+            break;
+        case ID:
+            lv = codegen(root->left);
+            root->reg = search_reg();
+            printf("MOV r%d [%d]\n", root->reg, getmem(root->lexeme));
+            retval = getval(root->lexeme);
+            if (retval == (-1e9 + 87))
+            {
+                printf("EXIT 1\n");
+                error(NOTFOUND);
+            }
+            if (lv != 0)
+            {
+                retval = setval(root->lexeme, retval + lv);
+                if (lv == 1)
+                    printf("ADD r%d r%d\n", root->reg, root->left->reg);
+                else
+                    printf("SUB r%d r%d\n", root->reg, root->left->reg);
+                printf("MOV [%d] r%d\n", getmem(root->lexeme), root->reg);
+                used[root->left->reg] = 0;
+            }
+            break;
+        case INT:
+            retval = atoi(root->lexeme);
+            root->reg = search_reg();
+            printf("MOV r%d %d\n", root->reg, retval);
+            break;
+        case ASSIGN:
+            rv = codegen(root->right);
+            root->reg = search_reg();
+            retval = setval(root->left->lexeme, rv);
+            printf("MOV r%d r%d\n", root->reg, root->right->reg);
+            printf("MOV [%d] r%d\n", getmem(root->left->lexeme), root->reg);
+            used[root->right->reg] = 0;
+            break;
+        case OR:
+        case XOR:
+        case AND:
+        case ADDSUB:
+        case MULDIV:
+            if (root->right->data != ID && root->right->data != INT)
+            {
+                rv = codegen(root->right);
+                lv = codegen(root->left);
+            }
+            else
+            {
+                lv = codegen(root->left);
+                rv = codegen(root->right);
+            }
+            if (root->left == NULL)
+            {
+                root->left = makeNode(INT, "0");
+                root->left->reg = search_reg();
+                printf("MOV r%d 0\n", root->left->reg);
+            }
+            if (strcmp(root->lexeme, "+") == 0)
+            {
+                retval = lv + rv;
+                printf("ADD r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            else if (strcmp(root->lexeme, "-") == 0)
+            {
+                retval = lv - rv;
+                printf("SUB r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            else if (strcmp(root->lexeme, "*") == 0)
+            {
+                retval = lv * rv;
+                printf("MUL r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            else if (strcmp(root->lexeme, "/") == 0)
+            {
+                if (rv == 0 && root->flag == 0)
+                {
+                    printf("EXIT 1\n");
+                    error(DIVZERO);
+                }
+                if (rv != 0)
+                    retval = lv / rv;
+                printf("DIV r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            else if (strcmp(root->lexeme, "|") == 0)
+            {
+                retval = lv | rv;
+                printf("OR r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            else if (strcmp(root->lexeme, "^") == 0)
+            {
+                retval = lv ^ rv;
+                printf("XOR r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            else if (strcmp(root->lexeme, "&") == 0)
+            {
+                retval = lv & rv;
+                printf("AND r%d r%d\n", root->left->reg, root->right->reg);
+            }
+            root->reg = root->left->reg;
+            used[root->right->reg] = 0;
             break;
         default:
             retval = 0;
